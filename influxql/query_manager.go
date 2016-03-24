@@ -20,6 +20,9 @@ var (
 	// ErrMaxConcurrentQueriesReached is an error when a query cannot be run
 	// because the maximum number of queries has been reached.
 	ErrMaxConcurrentQueriesReached = errors.New("max concurrent queries reached")
+
+	// ErrQueryTimeoutReached is an error when a query hits the timeout.
+	ErrQueryTimeoutReached = errors.New("query timeout reached")
 )
 
 // QueryTaskInfo holds information about a currently running query.
@@ -45,6 +48,26 @@ type QueryParams struct {
 	// Not required, but highly recommended. If this channel is not set, the
 	// query needs to be manually managed by the caller.
 	InterruptCh <-chan struct{}
+
+	// Holds any error thrown by the QueryManager if there is a problem while
+	// executing the query. Optional.
+	Error *QueryError
+}
+
+// QueryError is an error thrown by the QueryManager when there is a problem
+// while executing the query.
+type QueryError struct {
+	err error
+	mu  sync.Mutex
+}
+
+// Error returns any reason why the QueryManager may have
+// terminated the query. If a query completed successfully,
+// this value will be nil.
+func (q *QueryError) Error() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.err
 }
 
 type QueryManager interface {
@@ -103,12 +126,23 @@ func ExecuteShowQueriesStatement(qm QueryManager, q *ShowQueriesStatement) (mode
 	}}, nil
 }
 
+// queryTask is the internal data structure for managing queries.
+// For the public use data structure that gets returned, see QueryTask.
 type queryTask struct {
 	query     string
 	database  string
 	startTime time.Time
 	closing   chan struct{}
+	err       *QueryError
 	once      sync.Once
+}
+
+func (q *queryTask) setError(err error) {
+	if q.err != nil {
+		q.err.mu.Lock()
+		defer q.err.mu.Unlock()
+		q.err.err = err
+	}
 }
 
 type defaultQueryManager struct {
@@ -132,6 +166,7 @@ func (qm *defaultQueryManager) AttachQuery(params *QueryParams) (uint64, <-chan 
 		database:  params.Database,
 		startTime: time.Now(),
 		closing:   make(chan struct{}),
+		err:       params.Error,
 	}
 	qm.queries[qid] = query
 
@@ -150,7 +185,23 @@ func (qm *defaultQueryManager) waitForQuery(qid uint64, timeout time.Duration, c
 
 	select {
 	case <-closing:
+		qm.mu.Lock()
+		query, ok := qm.queries[qid]
+		qm.mu.Unlock()
+
+		if !ok {
+			break
+		}
+		query.setError(ErrQueryInterrupted)
 	case <-timer:
+		qm.mu.Lock()
+		query, ok := qm.queries[qid]
+		qm.mu.Unlock()
+
+		if !ok {
+			break
+		}
+		query.setError(ErrQueryTimeoutReached)
 	}
 	qm.KillQuery(qid)
 }
