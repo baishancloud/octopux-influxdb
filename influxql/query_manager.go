@@ -21,6 +21,10 @@ var (
 	// because the maximum number of queries has been reached.
 	ErrMaxConcurrentQueriesReached = errors.New("max concurrent queries reached")
 
+	// ErrMaxPointsReached is an error when a query hits the maximum number of
+	// points.
+	ErrMaxPointsReached = errors.New("max number of points reached")
+
 	// ErrQueryTimeoutReached is an error when a query hits the timeout.
 	ErrQueryTimeoutReached = errors.New("query timeout reached")
 )
