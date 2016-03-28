@@ -150,11 +150,11 @@ func TestSelectStatement_SetTimeRange(t *testing.T) {
 	}
 
 	s := stmt.(*influxql.SelectStatement)
-	min, max := influxql.TimeRange(s.Condition)
+	min, max, _ := influxql.TimeRange(s.Condition)
 	start := time.Now().Add(-20 * time.Hour).Round(time.Second).UTC()
 	end := time.Now().Add(10 * time.Hour).Round(time.Second).UTC()
 	s.SetTimeRange(start, end)
-	min, max = influxql.TimeRange(s.Condition)
+	min, max, _ = influxql.TimeRange(s.Condition)
 
 	if min != start {
 		t.Fatalf("start time wasn't set properly.\n  exp: %s\n  got: %s", start, min)
@@ -175,7 +175,7 @@ func TestSelectStatement_SetTimeRange(t *testing.T) {
 	}
 
 	s = stmt.(*influxql.SelectStatement)
-	min, max = influxql.TimeRange(s.Condition)
+	min, max, _ = influxql.TimeRange(s.Condition)
 	if start != min || end != max {
 		t.Fatalf("start and end times weren't equal:\n  exp: %s\n  got: %s\n  exp: %s\n  got:%s\n", start, min, end, max)
 	}
@@ -184,7 +184,7 @@ func TestSelectStatement_SetTimeRange(t *testing.T) {
 	start = time.Now().Add(-40 * time.Hour).Round(time.Second).UTC()
 	end = time.Now().Add(20 * time.Hour).Round(time.Second).UTC()
 	s.SetTimeRange(start, end)
-	min, max = influxql.TimeRange(s.Condition)
+	min, max, _ = influxql.TimeRange(s.Condition)
 
 	// TODO: right now the SetTimeRange can't override the start time if it's more recent than what they're trying to set it to.
 	//       shouldn't matter for our purposes with continuous queries, but fix this later
@@ -211,7 +211,7 @@ func TestSelectStatement_SetTimeRange(t *testing.T) {
 	start = time.Now().Add(-40 * time.Hour).Round(time.Second).UTC()
 	end = time.Now().Add(20 * time.Hour).Round(time.Second).UTC()
 	s.SetTimeRange(start, end)
-	min, max = influxql.TimeRange(s.Condition)
+	min, max, _ = influxql.TimeRange(s.Condition)
 
 	if min != start {
 		t.Fatalf("start time wasn't set properly.\n  exp: %s\n  got: %s", start, min)
@@ -749,8 +749,8 @@ func TestBinaryExprName(t *testing.T) {
 // Ensure the time range of an expression can be extracted.
 func TestTimeRange(t *testing.T) {
 	for i, tt := range []struct {
-		expr     string
-		min, max string
+		expr          string
+		min, max, err string
 	}{
 		// LHS VarRef
 		{expr: `time > '2000-01-01 00:00:00'`, min: `2000-01-01T00:00:00.000000001Z`, max: `0001-01-01T00:00:00Z`},
@@ -785,10 +785,13 @@ func TestTimeRange(t *testing.T) {
 		{expr: `time + 2`, min: `0001-01-01T00:00:00Z`, max: `0001-01-01T00:00:00Z`},
 		{expr: `time - '2000-01-01 00:00:00'`, min: `0001-01-01T00:00:00Z`, max: `0001-01-01T00:00:00Z`},
 		{expr: `time AND '2000-01-01 00:00:00'`, min: `0001-01-01T00:00:00Z`, max: `0001-01-01T00:00:00Z`},
+
+		// Invalid time expressions.
+		{expr: `time > "2000-01-01 00:00:00"`, min: `0001-01-01T00:00:00Z`, max: `0001-01-01T00:00:00Z`, err: `invalid operation: time and *influxql.VarRef are not compatible`},
 	} {
 		// Extract time range.
 		expr := MustParseExpr(tt.expr)
-		min, max := influxql.TimeRange(expr)
+		min, max, err := influxql.TimeRange(expr)
 
 		// Compare with expected min/max.
 		if min := min.Format(time.RFC3339Nano); tt.min != min {
@@ -798,6 +801,9 @@ func TestTimeRange(t *testing.T) {
 		if max := max.Format(time.RFC3339Nano); tt.max != max {
 			t.Errorf("%d. %s: unexpected max:\n\nexp=%s\n\ngot=%s\n\n", i, tt.expr, tt.max, max)
 			continue
+		}
+		if (err != nil && err.Error() != tt.err) || (err == nil && tt.err != "") {
+			t.Errorf("%d. %s: unexpected error:\n\nexp=%s\n\ngot=%s\n\n", i, tt.expr, tt.err, err)
 		}
 	}
 }
